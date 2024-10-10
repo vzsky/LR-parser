@@ -32,17 +32,18 @@ let is_non_terminal c = ('A' <= c && c <= 'Z') || c == '#';;
 let is_terminal c = ('a' <= c && c <= 'z') || c == '$' ;;
 
 let non_terminal grammars = 
-  List.map (fun (e, ps) -> 
+  List.concat_map (fun (e, ps) -> 
     String.fold_left (fun acc c -> if is_non_terminal c then c :: acc else acc) [e] ps
-  ) grammars |> List.concat |> unique
+  ) grammars |> unique
 ;;
 
 let terminal grammars = 
-  List.map (fun (e, ps) -> 
-    String.fold_left (fun acc c -> if is_terminal c then c :: acc else acc) [e] ps
-  ) grammars |> List.concat |> unique
+  List.concat_map (fun (e, ps) -> 
+    String.fold_left (fun acc c -> if is_terminal c then c :: acc else acc) [] ps
+  ) grammars |> unique
 ;;
 
+(* dot is the integer represent the position of the dot, from 0 (before first) to n (after last) *)
 let make_item grammar dot = let (e, ps) = grammar in (e, ps, dot) ;;
 
 let items grammar = 
@@ -62,18 +63,18 @@ let show_item item =
 ;;
 
 let rec first grammars nonterm = 
-  List.map (fun g -> 
+  List.concat_map (fun g -> 
     let (e, ps) = g in 
     let f = ps.[0] in 
     if e == nonterm then 
       if is_terminal f then [f] 
       else first grammars f 
     else []
-  ) grammars |> List.concat |> unique
+  ) grammars |> unique
 ;;
 
 let rec follow grammars nonterm = 
-  List.map (fun g -> 
+  List.concat_map (fun g -> 
     let (e, ps) = g in 
       str_to_list ps |> List.mapi (fun i p ->
       let next = try ps.[i+1] with Invalid_argument _ -> '$' in 
@@ -82,46 +83,45 @@ let rec follow grammars nonterm =
         else [next]
       else []
     ) |> List.concat
-  ) grammars |> List.concat |> unique
+  ) grammars |> unique
 ;;
 
 let rec closure grammars items = 
-  List.map (fun item -> 
+  List.concat_map (fun item -> 
     let (e, ps, dot) = item in 
     try let next = ps.[dot] in 
-      List.map (fun (e, ps) -> 
+      List.concat_map (fun (e, ps) -> 
         if e == next then closure grammars [make_item (e, ps) 0]
         else []
-      ) grammars |> List.concat
+      ) grammars 
     with Invalid_argument _ -> []
-  ) items |> List.concat |> (List.append items) |> unique
+  ) items |> (List.append items) |> unique
 ;;
 
 let rec goto grammars items next_tok = 
-  List.map (fun item -> 
+  List.concat_map (fun item -> 
     let (e, ps, dot) = item in 
     try let expected = ps.[dot] in 
       if expected == next_tok then [make_item (e, ps) (dot+1)] 
       else []
     with Invalid_argument _ -> []
-  ) items |> List.concat |> unique |> (closure grammars)
+  ) items |> unique |> (closure grammars)
 ;;
 
 let reduce grammars stack rule = 
   let (e, ps) = rule in 
-  let stack = stack_pop stack (String.length ps) in 
-  stack_push stack (goto grammars (stack_top stack) e)
+  let goto_with_e state = goto grammars state e in
+  stack_pop stack (String.length ps) |> stack_top |> goto_with_e |> stack_push stack
 ;;
 
 type action = Shift | Reduce | Accept ;;
 type action_entry = action * (char -> stack -> stack)
 
 let action grammars items :action_entry = 
-  if (List.exists (fun g -> g = ('#', "S", 1)) items) then (Accept, fun next_tok stack -> stack) else
+  if List.exists (fun g -> g = ('#', "S", 1)) items then (Accept, fun _ b -> b) else
   let reduce_rule = List.find_map (fun (e, ps, dot) -> if String.length ps == dot then 
-    Some (Reduce, fun next_tok stack -> reduce grammars stack (e, ps)) 
+    Some (Reduce, fun _ stack -> reduce grammars stack (e, ps)) 
   else None) items in
-
   match reduce_rule with 
   | Some r -> r 
   | None   -> (Shift, fun next_tok stack -> stack_push stack (goto grammars items next_tok)) 
@@ -136,10 +136,10 @@ let lr0_parser grammars string =
   let rec parse stack tokens =
     match action g (stack_top stack) with 
     | (Reduce, f) -> parse (f '?' stack) tokens
-    | (Accept, _) -> "Accept, Remaining: " ^ (str_of_list tokens)
+    | (Accept, _) -> "Accepted - tokens remaining: " ^ (str_of_list tokens)
     | (Shift, f) -> parse (f (List.nth tokens 0) stack) (List.tl tokens)
   in try parse stack tokens with 
-  | Failure _ -> "Reject"
+  | Failure _ -> "Rejected"
 ;; 
 
 (*A few special characters: 
